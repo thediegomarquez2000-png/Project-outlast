@@ -1,0 +1,51 @@
+OUTLAST COMMAND CENTER — SOURCE PACKAGE
+
+This is the Next.js / Vercel version of the dashboard, with the source, assets, tests, and dependency lockfile.
+
+RUN LOCALLY
+Unzip the folder, open a terminal there, and run:
+  npm ci
+  npm run dev
+Then open http://localhost:3000
+
+DEPLOY TO VERCEL
+Run:
+  npx vercel
+Follow the prompts to link your account and select the outlast-command project.
+For a production deployment, run:
+  npx vercel --prod
+
+Use Node.js 22. Vercel detects Next.js automatically.
+To deploy through GitHub, put this folder at the repository root and import that repository into Vercel.
+
+OPTIONAL SAVED HISTORY
+The app uses a private Vercel Blob store for seven-day observation history.
+Connect that store to the Vercel project so BLOB_READ_WRITE_TOKEN is available.
+For local development, place your own token in .env.local. Never commit that file.
+Without storage, live feeds still work and the server keeps session observations in memory.
+
+CURRENT LIMITATIONS
+The production build and all 35 automated checks passed.
+SCORING: 100 = loss of life likely, days of self-sufficiency at best. The index follows the worst system,
+plus a quarter of every other system scoring 50+. Reference points live in lib/alert-weights.ts.
+In the most recent Vercel live check (preview deployment, Nov 16 2026), 48 of 50 sources were fresh
+(Hazards 9, Power 6, Water 3, Digital 13, Payments 7, Transport 12):
+- California American Water: amwater.com sits behind a Cloudflare bot challenge that blocks
+  requests from data-center IPs (Vercel included). It is shown as unavailable and excluded from the score.
+- Cal OES evacuation zones: the publisher had not updated the layer for about two hours (the
+  freshness limit is 30 minutes), so it is marked stale and excluded from the live score.
+Persistent history writes were not confirmed in that check.
+The source marks unavailable/stale data explicitly; it does not treat a failed feed as healthy.
+Bay Area, California, and national news are separate widgets.
+The connection test runs only when you start it and transfers up to approximately 45 MB.
+Preparedness entries are stored separately in each browser and website origin.
+
+NOT YET ADDED (need a free API key each, set as Vercel environment variables)
+- AirNow air quality / smoke (airnowapi.org)
+- NASA FIRMS satellite fire detections (firms.modaps.eosdis.nasa.gov)
+- EIA grid data (eia.gov/opendata)
+- 511.org transit alerts for Muni, Caltrain, VTA, AC Transit (511.org/open-data)
+No reliable machine-readable feed was found for additional Bay Area water utilities.
+
+PACKAGE CONTENTS
+No account credentials, .env files, .vercel state, node_modules, build output, or Git history are included.

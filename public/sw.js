@@ -1,0 +1,6 @@
+const CACHE='outlast-station-v1';
+const eligible=url=>url.origin===self.location.origin&&!/^\/(api|signin-with-chatgpt|signout-with-chatgpt|callback)(\/|$)/.test(url.pathname)&&!url.search;
+self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(['/','/geography.json','/fonts/space.ttf','/fonts/plex.ttf'])).catch(()=>{}));});
+self.addEventListener('activate',e=>{e.waitUntil(Promise.all([self.clients.claim(),caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('outlast-')&&k!==CACHE).map(k=>caches.delete(k))))]));});
+self.addEventListener('message',e=>{if(e.data?.type==='CACHE_RESOURCES'&&Array.isArray(e.data.urls))e.waitUntil(caches.open(CACHE).then(c=>Promise.all(e.data.urls.slice(0,60).filter(u=>{try{return eligible(new URL(u));}catch{return false;}}).map(u=>c.add(u).catch(()=>{})))));});
+self.addEventListener('fetch',e=>{if(e.request.method!=='GET'||!eligible(new URL(e.request.url)))return;e.respondWith(fetch(e.request).then(r=>{if(r.ok&&r.type!=='opaque'){const copy=r.clone();e.waitUntil(caches.open(CACHE).then(c=>c.put(e.request,copy)));}return r;}).catch(async()=>{const cached=await caches.match(e.request);return cached??new Response('Offline: this resource has not been saved yet.',{status:503,headers:{'Content-Type':'text/plain'}});}));});
