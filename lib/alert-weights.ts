@@ -44,6 +44,7 @@ export function weatherAlertSeverity(event: string, capSeverity?: string, text =
 // Index scoring policy (owner-defined, Nov 2026). Applied to every source's incidents after parsing:
 //   * ordinary provider incidents ................................ 2
 //   * a society-critical provider actually down (major/critical) . 25
+//   * nationwide banking failure (2+ Fed payment rails disrupted) . 60 (one rail 25)
 //   * power or water service affected ............................ 60 (smaller outages scale down;
 //     100k+ customers or a 48h+ restoration estimate 85, both 95)
 //   * ordinary transport disruption .............................. capped at 20 (emergency highway
@@ -51,7 +52,7 @@ export function weatherAlertSeverity(event: string, capSeverity?: string, text =
 //   * national security / civil emergency (NWS civil alerts) ..... 85
 //   * natural disasters in your area (earthquake by magnitude) ... up to 90
 // ---------------------------------------------------------------------------------------------
-export const CRITICAL_PROVIDERS = new Set(['aws', 'gcloud', 'azure', 'cloudflare', 'akamai', 'fed']);
+export const CRITICAL_PROVIDERS = new Set(['aws', 'gcloud', 'azure', 'cloudflare', 'akamai']);
 // Size and expected duration: a city dark for days (canned-food territory) is far worse than an afternoon outage.
 export function outageScore(customers: number, restoreAt?: number, now = Date.now()) {
   const base = customers >= 1000 ? 60 : customers >= 100 ? 30 : customers >= 10 ? 10 : 4;
@@ -67,6 +68,9 @@ function rescore(source: Source, i: Incident): number {
   const was = i.severity;
   if (source.sector === 'comms' || source.sector === 'payments') {
     if (source.id === 'radioblackout') return was >= 35 ? 25 : 2; // R3+ blackouts disrupt HF radio and GPS
+    // Federal Reserve rails move money between banks. One rail down (e.g. FedNow) is serious but contained;
+    // a nationwide banking failure is handled in applyScoringPolicy (2+ rails in "Service Disruption" = 60).
+    if (source.id === 'fed') return /disruption/i.test(i.status) ? 25 : 2;
     return CRITICAL_PROVIDERS.has(source.id) && was >= 55 ? 25 : 2;
   }
   if (source.sector === 'power') {
@@ -101,6 +105,9 @@ export function strandingScore(source: Source, i: Incident): number {
 }
 export function applyScoringPolicy(source: Source, incidents: Incident[]): Incident[] {
   const out = incidents.map(i => { const severity = rescore(source, i); return severity === i.severity ? i : { ...i, severity, level: level(severity) }; });
+  // Nationwide banking failure: two or more Fed payment rails disrupted at once means people broadly cannot move
+  // money (paychecks, transfers, card settlement). Owner-defined as equal to losing power or water: 60.
+  if (source.id === 'fed' && out.filter(i => /disruption/i.test(i.status)).length >= 2) out.forEach((i, k) => { if (/disruption/i.test(i.status)) out[k] = { ...i, severity: 60, level: level(60) }; });
   // Many small outages add up: score the area total too, so a storm with hundreds of small outages still registers.
   if (source.sector === 'power') {
     const total = incidents.reduce((n, i) => n + (i.affected ?? 0), 0), worst = Math.max(0, ...out.map(i => i.severity)), restore = incidents.filter(i => (i.affected ?? 0) >= 100 && i.restoreAt).map(i => i.restoreAt as number), areaScore = outageScore(total, restore.length ? Math.max(...restore) : undefined);
