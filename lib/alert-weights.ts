@@ -45,8 +45,11 @@ export function weatherAlertSeverity(event: string, capSeverity?: string, text =
 //   * ordinary provider incidents ................................ 2
 //   * a society-critical provider actually down (major/critical) . 25
 //   * nationwide banking failure (2+ Fed payment rails disrupted) . 60 (one rail 25)
-//   * power or water service affected ............................ 60 (smaller outages scale down;
-//     100k+ customers or a 48h+ restoration estimate 85, both 95)
+//   * power outages, by customers out and restoration estimate (v3.1, realistic tiers):
+//       <10 → 4 · 10-99 → 10 · 100-999 → 25 · 1k-9.9k → 35 · 10k-99k → 60 · 100k+ → 85
+//       1k+ with a 24h+ estimate → at least 60 · 10k+ with 48h+ → at least 85 · 100k+ with 48h+ → 95
+//   * CAISO grid emergencies: Flex Alert/watch 20 · EEA1 35 · EEA2 50 · EEA3 (rotating outages) 75
+//   * water: boil-water / do-not-drink 60 · regional emergency bulletin 35 · street-level outage 30
 //   * ordinary transport disruption .............................. capped at 20 (emergency highway
 //     closure 30, security/outage ground stop 60, unscheduled local airport closure 70, 3+ highways cut 75)
 //   * national security / civil emergency (NWS civil alerts) ..... 85
@@ -56,11 +59,16 @@ export function weatherAlertSeverity(event: string, capSeverity?: string, text =
 // ---------------------------------------------------------------------------------------------
 export const CRITICAL_PROVIDERS = new Set(['aws', 'gcloud', 'azure', 'cloudflare', 'akamai']);
 // Size and expected duration: a city dark for days (canned-food territory) is far worse than an afternoon outage.
+// PG&E alone usually has several 1,000+ customer outages somewhere in the Bay Area on an ordinary day, so a
+// single outage of that size is an advisory, not an emergency. It becomes serious with size or duration.
 export function outageScore(customers: number, restoreAt?: number, now = Date.now()) {
-  const base = customers >= 1000 ? 60 : customers >= 100 ? 30 : customers >= 10 ? 10 : 4;
+  const base = customers >= 100000 ? 85 : customers >= 10000 ? 60 : customers >= 1000 ? 35 : customers >= 100 ? 25 : customers >= 10 ? 10 : 4;
   if (customers < 1000) return base;
-  const huge = customers >= 100000, long = restoreAt !== undefined && restoreAt - now > 48 * 3600000;
-  return huge && long ? 95 : huge || long ? 85 : base;
+  const hours = restoreAt === undefined ? 0 : (restoreAt - now) / 3600000;
+  if (customers >= 100000 && hours > 48) return 95;
+  if (customers >= 10000 && hours > 48) return Math.max(base, 85);
+  if (hours > 24) return Math.max(base, 60);
+  return base;
 }
 // Intensity at the epicenter. Distance and population reach are applied by the scope lens (lib/exposure.ts),
 // so a distant quake is no longer halved here.
@@ -78,11 +86,12 @@ function rescore(source: Source, i: Incident): number {
   }
   if (source.sector === 'power') {
     if (i.affected !== undefined) return outageScore(i.affected, i.restoreAt);
-    if (source.id === 'caiso') return was >= 58 ? 60 : 20; // grid emergencies (EEA) vs. Flex Alerts / watches
+    if (source.id === 'caiso') return was >= 92 ? 75 : was >= 75 ? 50 : was >= 58 ? 35 : 20; // EEA3 rotating outages, EEA2, EEA1, Flex Alert / watch
     if (source.id === 'geomag') return was >= 55 ? 60 : was >= 35 ? 25 : 5; // G4+ can trip grid equipment
     return was;
   }
-  if (source.sector === 'water') return was >= 35 ? 60 : Math.min(was, 15); // unplanned outage / boil-water vs. routine work
+  // Unsafe water affects everyone on the system; a main break affects one street for hours.
+  if (source.sector === 'water') return was >= 80 ? 60 : was >= 40 ? 35 : was >= 35 ? 30 : Math.min(was, 15);
   // Ordinary transport disruption (weather ground stops, planned roadwork, scheduled closures, chain controls) is a
   // travel problem, not danger: capped at 20 (repeated SFO ground stops showed how quickly it otherwise dominates).
   // Exceptions are events that strand people: see strandingScore() and the area check in applyScoringPolicy().

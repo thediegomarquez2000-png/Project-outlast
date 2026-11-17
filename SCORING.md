@@ -12,12 +12,25 @@ Each view uses one severity ladder but answers a different question.
 
 ## The two numbers on every record
 
-1. **Severity (0–100)** is how bad the event is for the people inside it. These are the owner-defined reference points in `lib/alert-weights.ts`: an M6+ earthquake is 90, an evacuation order 95, power or water out for 1,000+ customers 60, a nationwide Fed-rail failure 60, and a routine provider incident 2.
+1. **Severity (0–100)** is how bad the event is for the people inside it. These are the owner-defined reference points in `lib/alert-weights.ts`: an M6+ earthquake is 90, an evacuation order 95, power out for 10k+ customers 60, a nationwide Fed-rail failure 60, and a routine provider incident 2.
 2. **People affected** comes from `lib/exposure.ts`. Each record carries a basis label:
    - `reported`: utility customer accounts × 2.5
    - `census`: population of the NWS-alerted counties (de-duplicated across overlapping alerts), or people inside an earthquake's strong-shaking radius (M5 ≈ 25 km, M6 ≈ 63 km, M7 ≈ 160 km)
    - `systemic`: cloud, payment rails and space weather, which affect the whole scope at once
    - `estimate`: fixed, labeled values for fires, evacuation zones, water notices and transport
+
+## Power, grid and water tiers (v3.1)
+
+PG&E usually has several outages of 1,000 or more customers somewhere in the Bay Area on an ordinary day. A single outage that size is therefore an advisory. Size or duration is what makes it serious.
+
+| Customers out | Under 10 | 10–99 | 100–999 | 1k–9.9k | 10k–99k | 100k+ |
+|---|---|---|---|---|---|---|
+| Score | 4 | 10 | 25 | 35 | 60 | 85 |
+
+Restoration estimates raise the score: 1k or more customers estimated past 24 hours scores at least 60, 10k or more past 48 hours scores at least 85, and 100k or more past 48 hours scores 95.
+
+- **CAISO grid:** Flex Alert 20, EEA1 35, EEA2 50, EEA3 (rotating outages) 75.
+- **Water:** a street-level main break scores 30, a regional emergency bulletin 35, and a boil-water or do-not-drink notice 60.
 
 ## Reach
 
@@ -38,7 +51,10 @@ Records are processed from most to least severe and their people are accumulated
 
 | Scenario | Bay Area | California | U.S. |
 |---|---|---|---|
-| Quiet day: 40 small PG&E outages, wind advisory | 30 | 13 | 9 |
+| Nothing happening | 0 | 0 | 0 |
+| Ordinary day: 25 small PG&E outages + one of 1,400 | 35 | 9 | 0 |
+| Storm: 300 outages, 90k customers total | 38 | 27 | 9 |
+| One 15k-customer outage | 60 | 12 | 0 |
 | Tornado warning, Oklahoma County (OKC) | – | – | 30 (peak 92) |
 | M7.0 Hayward fault | 90 | 90 | 65 |
 | M7.0 Los Angeles | – | 90 | 68 |
