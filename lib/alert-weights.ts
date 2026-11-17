@@ -50,7 +50,9 @@ export function weatherAlertSeverity(event: string, capSeverity?: string, text =
 //   * ordinary transport disruption .............................. capped at 20 (emergency highway
 //     closure 30, security/outage ground stop 60, unscheduled local airport closure 70, 3+ highways cut 75)
 //   * national security / civil emergency (NWS civil alerts) ..... 85
-//   * natural disasters in your area (earthquake by magnitude) ... up to 90
+//   * natural disasters (earthquake by magnitude at the epicenter) up to 90
+// These are intensities: how bad it is for the people inside the event. How far it reaches across the
+// selected scope (Bay Area, California, United States) is applied afterwards in lib/exposure.ts.
 // ---------------------------------------------------------------------------------------------
 export const CRITICAL_PROVIDERS = new Set(['aws', 'gcloud', 'azure', 'cloudflare', 'akamai']);
 // Size and expected duration: a city dark for days (canned-food territory) is far worse than an afternoon outage.
@@ -60,9 +62,10 @@ export function outageScore(customers: number, restoreAt?: number, now = Date.no
   const huge = customers >= 100000, long = restoreAt !== undefined && restoreAt - now > 48 * 3600000;
   return huge && long ? 95 : huge || long ? 85 : base;
 }
-export function earthquakeScore(magnitude: number, local: boolean) {
-  const s = magnitude >= 6 ? 90 : magnitude >= 5 ? 75 : magnitude >= 4 ? 45 : magnitude >= 3 ? 15 : 5;
-  return local ? s : Math.round(s / 2);
+// Intensity at the epicenter. Distance and population reach are applied by the scope lens (lib/exposure.ts),
+// so a distant quake is no longer halved here.
+export function earthquakeScore(magnitude: number) {
+  return magnitude >= 6 ? 90 : magnitude >= 5 ? 75 : magnitude >= 4 ? 45 : magnitude >= 3 ? 15 : 5;
 }
 function rescore(source: Source, i: Incident): number {
   const was = i.severity;
@@ -86,7 +89,7 @@ function rescore(source: Source, i: Incident): number {
   if (source.sector === 'transport') return Math.max(Math.min(was, 20), strandingScore(source, i));
   if (source.id === 'usgs') {
     const mag = Number(i.title.match(/^M(-?\d+(?:\.\d+)?)/)?.[1]);
-    return Number.isFinite(mag) ? earthquakeScore(mag, i.geographic === 'local') : was;
+    return Number.isFinite(mag) ? earthquakeScore(mag) : was;
   }
   return was;
 }
@@ -111,7 +114,7 @@ export function applyScoringPolicy(source: Source, incidents: Incident[]): Incid
   // Many small outages add up: score the area total too, so a storm with hundreds of small outages still registers.
   if (source.sector === 'power') {
     const total = incidents.reduce((n, i) => n + (i.affected ?? 0), 0), worst = Math.max(0, ...out.map(i => i.severity)), restore = incidents.filter(i => (i.affected ?? 0) >= 100 && i.restoreAt).map(i => i.restoreAt as number), areaScore = outageScore(total, restore.length ? Math.max(...restore) : undefined);
-    if (areaScore > worst) out.unshift({ id: `${source.id}-area-total`, sourceId: source.id, sector: source.sector, title: `${total.toLocaleString('en-US')} ${source.name.replace(/ outages.*| local outages/i, '')} customer accounts out across the selected area`, description: `Combined total of ${incidents.length} reported outage locations. Individually small outages can add up to a widespread event.`, severity: areaScore, level: level(areaScore), place: 'Selected area', time: Math.max(...incidents.map(i => i.time)), url: source.url, status: 'Area total', geographic: 'regional', affected: undefined });
+    if (total > 0 && areaScore > worst) out.unshift({ id: `${source.id}-area-total`, sourceId: source.id, sector: source.sector, title: `${total.toLocaleString('en-US')} ${source.name.replace(/ outages.*| local outages/i, '')} customer accounts out across the selected area`, description: `Combined total of ${incidents.length} reported outage locations. Individually small outages can add up to a widespread event.`, severity: areaScore, level: level(areaScore), place: 'Selected area', time: Math.max(...incidents.map(i => i.time)), url: source.url, status: 'Area total', geographic: 'regional', affected: undefined });
   }
   // Roads out are cut: three or more simultaneous emergency full highway closures in one area (e.g. mass stalled
   // vehicles, a slide or a disaster) can strand people, so this rises well above the ordinary transport cap.

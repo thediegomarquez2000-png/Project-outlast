@@ -25,9 +25,11 @@ For local development, place your own token in .env.local. Never commit that fil
 Without storage, live feeds still work and the server keeps session observations in memory.
 
 CURRENT LIMITATIONS
-The production build and all 35 automated checks passed.
-SCORING: 100 = loss of life likely, days of self-sufficiency at best. The index follows the worst system,
-plus a quarter of every other system scoring 50+. Reference points live in lib/alert-weights.ts.
+The production build and all 48 automated checks passed.
+SCORING (v3, see SCORING.md): 100 = loss of life likely, days of self-sufficiency at best. Bay Area reads
+intensity near home; California and United States read severity x share of population affected. The index
+follows the worst system, plus a quarter of every other system scoring 50+. Severities: lib/alert-weights.ts;
+population lens: lib/exposure.ts.
 In the most recent Vercel live check (preview deployment, Nov 16 2026), 48 of 50 sources were fresh
 (Hazards 9, Power 6, Water 3, Digital 13, Payments 7, Transport 12):
 - California American Water: amwater.com sits behind a Cloudflare bot challenge that blocks

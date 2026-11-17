@@ -1,3 +1,4 @@
+import { sectorReading, visibility } from './exposure';
 export type Scope = 'bay' | 'ca' | 'us';
 export type SectorId = 'hazards' | 'power' | 'water' | 'comms' | 'payments' | 'transport';
 export type SourceState = 'fresh' | 'stale' | 'unavailable' | 'manual';
@@ -6,6 +7,9 @@ export interface Incident {
   severity: number; level: 'critical' | 'major' | 'advisory' | 'minor';
   place: string; lat?: number; lon?: number; time: number; expires?: number;
   url: string; instruction?: string; affected?: number; restoreAt?: number; timeLabel?: string; status: string; geographic: 'local' | 'regional' | 'national' | 'global';
+  /** People touched (see lib/exposure.ts). areas = county FIPS codes when known (NWS alerts). */
+  people?: number; peopleBasis?: 'reported' | 'census' | 'estimate' | 'systemic'; areas?: string[];
+  /** Radius of the event's own footprint (earthquake strong shaking), used by the local proximity lens. */ radiusKm?: number;
 }
 export interface Source {
   id: string; name: string; sector: SectorId; url: string; endpoint?: string;
@@ -18,14 +22,18 @@ export interface SourceResult extends Source {
 export interface Sector {
   id: SectorId; title: string; short: string; weight: number; description: string;
   score: number | null; incidents: number; fresh: number; total: number; partial: boolean;
+  /** Share (0-1) of the scope's population this sector's fresh feeds can see. */
+  visibility: number; driver: string | null; people: number;
 }
 export interface Snapshot {time: number; score: number | null; coverage: number; sectors: Record<string, number | null>}
 export interface DashboardData {
   scope: Scope; generatedAt: number; nextRefresh: number; score: number | null; coverage: number;
+  /** Worst single event anywhere in scope, before the scope lens. */ peak: number | null;
+  /** Population-weighted visibility across systems (0-100). */ confidence: number;
   sectors: Sector[]; sources: SourceResult[]; incidents: Incident[]; history: Snapshot[];
   historyPersistent: boolean; critical: boolean;
 }
-export const SECTORS: Omit<Sector,'score'|'incidents'|'fresh'|'total'|'partial'>[] = [
+export const SECTORS: Omit<Sector,'score'|'incidents'|'fresh'|'total'|'partial'|'visibility'|'driver'|'people'>[] = [
   { id:'hazards', title:'Local hazards', short:'Hazards', weight:30, description:'Official weather alerts, earthquakes, wildfires (NIFC, CAL FIRE, InciWeb), evacuation zones, tsunami warnings, volcano alerts and GDACS disaster alerts.' },
   { id:'power', title:'Power grid', short:'Power', weight:25, description:'California grid advisories, utility outage locations for PG&E, SCE, SDG&E and SMUD with affected customers and restoration estimates, and NOAA geomagnetic storm levels.' },
   { id:'water', title:'Water systems', short:'Water', weight:20, description:'San Jose Water service notices and outage map, plus regional California American Water bulletins. Provider and street coverage are identified; this is not a real-time water-safety test.' },
@@ -86,16 +94,22 @@ export const SOURCE_DEFS: Source[] = [
   {"id":"alertscc","name":"California evacuation zones · Cal OES","sector":"hazards","url":"https://gis.data.ca.gov/datasets/CalEMA::california-evacuation-aggregation-layer","endpoint":"https://services.arcgis.com/BLN4oKB0N1YSgvY8/arcgis/rest/services/CA_EVACUATIONS_CalOESHosted_view/FeatureServer/0/query?f=json&where=1%3D1&outFields=%2A&outSR=4326&returnGeometry=true&resultRecordCount=2000&maxAllowableOffset=0.005","metaUrl":"https://services.arcgis.com/BLN4oKB0N1YSgvY8/arcgis/rest/services/CA_EVACUATIONS_CalOESHosted_view/FeatureServer/0?f=json","maxAge":1800,"mode":"automatic","interval":180,"description":"Official Cal OES aggregation of published county evacuation zones, normally refreshed every five minutes. Old zone-status dates remain visible. Coverage varies by county and is supplementary to official emergency notifications."}
 ];
 export function level(score:number): Incident['level'] {return score>=85?'critical':score>=55?'major':score>=20?'advisory':'minor';}
-export function scoreLabel(score:number|null) {return score===null?'Awaiting data':score>=70?'Severe disruption':score>=40?'Elevated disruption':score>=20?'Advisories detected':'Low observed disruption';}
+export function scoreLabel(score:number|null) {return score===null?'Awaiting data':score>=85?'Critical disruption':score>=70?'Severe disruption':score>=40?'Elevated disruption':score>=20?'Advisories detected':'Low observed disruption';}
 export function scoreColor(score:number|null) {return score===null?'muted':score>=70?'red':score>=40?'orange':score>=20?'amber':'teal';}
-export function summarizeSources(sources:SourceResult[]){
+export function summarizeSources(sources:SourceResult[],scope:Scope='bay'){
   const incidents=sources.filter(s=>s.state==='fresh').flatMap(s=>s.incidents).filter((i,index,all)=>all.findIndex(x=>x.id===i.id&&x.sourceId===i.sourceId)===index).sort((a,b)=>b.severity-a.severity||b.time-a.time);
-  const sectors=SECTORS.map(s=>{const all=sources.filter(x=>x.sector===s.id);const fresh=all.filter(x=>x.state==='fresh');const signals=incidents.filter(x=>x.sector===s.id);return {...s,score:fresh.length?Math.max(0,...signals.map(x=>Math.max(0,Math.min(100,x.severity)))):null,incidents:signals.length,fresh:fresh.length,total:all.length,partial:fresh.length<all.length};});
+  // Each system is read through the scope's lens (lib/exposure.ts): local = intensity near home,
+  // state / nation = severity × share of the population affected.
+  const sectors=SECTORS.map(s=>{const all=sources.filter(x=>x.sector===s.id);const fresh=all.filter(x=>x.state==='fresh');const signals=incidents.filter(x=>x.sector===s.id);const r=sectorReading(signals,scope);return {...s,score:fresh.length?r.score:null,incidents:signals.length,fresh:fresh.length,total:all.length,partial:fresh.length<all.length,visibility:Math.round(visibility(all,scope)*100)/100,driver:r.driver?.title??null,people:r.people};});
   // 100 = people are likely to die and days of self-sufficiency are the best case. The index follows the worst
   // system; each additional system that is seriously hit (50+) adds a quarter of its score, because compound
   // failures (e.g. an earthquake plus power and water loss) are worse than any one of them.
   const observed=sectors.filter(s=>s.score!==null).map(s=>s.score as number).sort((a,b)=>b-a);
   const score=observed.length?Math.min(100,Math.round(observed[0]+observed.slice(1).filter(v=>v>=50).reduce((n,v)=>n+v/4,0))):null;
   const coverage=sources.length?Math.round(sources.filter(s=>s.state==='fresh').length/sources.length*100):0;
-  return {incidents,sectors,score,coverage};
+  const peak=observed.length?Math.max(0,...incidents.filter(i=>i.status!=='Area total').map(i=>Math.min(100,i.severity))):null;
+  // Confidence: how much of the scope's population the index can actually see, weighted by system importance.
+  const totalWeight=SECTORS.reduce((n,s)=>n+s.weight,0);
+  const confidence=Math.round(sectors.reduce((n,s)=>n+s.weight*s.visibility,0)/totalWeight*100);
+  return {incidents,sectors,score,coverage,peak,confidence};
 }

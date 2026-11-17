@@ -2,6 +2,7 @@ import { recordObservation } from './storage';
 import { cachedFeed } from './fetch-source';
 import { providerParsers, bayWeatherArea } from './providers';
 import { weatherAlertSeverity, applyScoringPolicy } from './alert-weights';
+import { withExposure } from './exposure';
 import { type Scope, type Source, type SourceResult, type Incident, type DashboardData, type Snapshot, SOURCE_DEFS, summarizeSources, level } from './model';
 
 const MINUTE=60_000;
@@ -28,7 +29,7 @@ function weather(source:Source,text:string,scope:Scope):Incident[]{
     const p=f.properties;const severity=weatherAlertSeverity(String(p.event??''),p.severity,`${p.headline??''} ${p.description??''}`);
     let lat:number|undefined,lon:number|undefined;
     if(f.geometry?.type==='Polygon'){const a=f.geometry.coordinates[0];lon=a.reduce((s:number,c:number[])=>s+c[0],0)/a.length;lat=a.reduce((s:number,c:number[])=>s+c[1],0)/a.length;}
-    return incident(source,{id:p.id??f.id,title:p.event,description:clean(p.description).slice(0,5000),severity,place:p.areaDesc,time:date(p.sent),expires:date(p.expires),url:safeUrl(p.web,source.url),instruction:clean(p.instruction),status:p.urgency==='Immediate'?'Immediate':'Active alert',geographic:bayWeatherArea(p)?'local':'regional',lat,lon});
+    return incident(source,{id:p.id??f.id,title:p.event,description:clean(p.description).slice(0,5000),severity,place:p.areaDesc,time:date(p.sent),expires:date(p.expires),url:safeUrl(p.web,source.url),instruction:clean(p.instruction),status:p.urgency==='Immediate'?'Immediate':'Active alert',geographic:bayWeatherArea(p)?'local':'regional',lat,lon,areas:((p.geocode?.SAME??[]) as string[]).map(x=>String(x).slice(-5))});
   });
 }
 function quakes(source:Source,text:string,scope:Scope):Incident[]{const d=JSON.parse(text);if(!Array.isArray(d.features))throw new Error('USGS feed format changed');return d.features.filter((f:any)=>{const [lon,lat]=f.geometry.coordinates;return inside(lat,lon,scope);}).map((f:any)=>{const p=f.properties;const [lon,lat,depth]=f.geometry.coordinates;const mag=Number(p.mag);const severity=mag>=6?90:mag>=5?62:mag>=4?35:mag>=3?14:5;return incident(source,{id:f.id,title:`M${mag.toFixed(1)} earthquake`,description:`${p.place}. Depth ${Number(depth).toFixed(1)} km. Reported by USGS. Magnitude and location may be revised. This is a recorded event, not a forecast or an early-warning service.`,severity,place:p.place,time:date(p.time),url:safeUrl(p.url,source.url),lat,lon,geographic:dist(lat,lon)<=145?'local':'regional',status:'Recorded event'});});}
@@ -65,7 +66,7 @@ async function readSource(source:Source,scope:Scope):Promise<SourceResult>{
  const parser=({...providerParsers,nws:weather,usgs:quakes,cloudflare:statusPage,github:statusPage,banks:statusPage,sjwater:water,faa:aviation,caiso:grid,fed:federal} as Record<string,(s:Source,p:string,g:Scope)=>Incident[]>)[source.id];
  if(!parser)throw new Error('No validated adapter is configured');
  const validate=(payload:string)=>{if(source.id==='faa'&&!payload.includes('<AIRPORT_STATUS_INFORMATION'))throw new Error('Unexpected FAA format');if(source.id==='sjwater'&&!payload.includes('Outage Information'))throw new Error('Water page format changed');return parser(source,payload,'us');};
- const result=await cachedFeed(source,validate);const incidents=applyScoringPolicy(source,parser(source,result.payload,scope));
+ const result=await cachedFeed(source,validate);const incidents=applyScoringPolicy(source,parser(source,result.payload,scope)).map(i=>withExposure(source,i));
  const customers=incidents.reduce((sum,i)=>sum+(i.affected??0),0);
  const detail=source.id==='pge'?`${incidents.filter(i=>i.affected!==undefined).length} outage locations · ${customers.toLocaleString('en-US')} customer accounts`:`${incidents.length} relevant published records`;
  return {...source,state:result.state,checkedAt,lastSuccess:result.fetchedAt,publishedAt:result.publishedAt,connectionUrl:result.connectionUrl,connectionLabel:result.connectionLabel,usingFallback:result.usingFallback,message:result.state==='fresh'?`${result.connectionLabel} · ${detail}`:result.publishedAt&&result.maxPublicationAge&&Date.now()-result.publishedAt>result.maxPublicationAge*1000?'Provider publication delayed. Dated records are available in the source panel and excluded from the current index.':`Refresh failed; last successful response retained. ${result.error??''}`,incidents};
@@ -74,8 +75,8 @@ async function readSource(source:Source,scope:Scope):Promise<SourceResult>{
 
 export async function getDashboard(scope:Scope):Promise<DashboardData>{
   const sources=await Promise.all(SOURCE_DEFS.map(s=>readSource(s,scope)));
-  const {incidents,sectors,score,coverage}=summarizeSources(sources);
+  const {incidents,sectors,score,coverage,peak,confidence}=summarizeSources(sources,scope);
   const generatedAt=Date.now();const bucket=Math.floor(generatedAt/(5*MINUTE))*5*MINUTE;const sectorScores=Object.fromEntries(sectors.map(s=>[s.id,s.score]));
   const {history,historyPersistent}=await recordObservation(scope,{time:bucket,score,coverage,sectors:sectorScores});
-  return {scope,generatedAt,nextRefresh:generatedAt+180_000,score,coverage,sectors,sources,incidents,history,historyPersistent,critical:incidents.some(x=>x.severity>=85&&x.geographic==='local')};
+  return {scope,generatedAt,nextRefresh:generatedAt+180_000,score,coverage,peak,confidence,sectors,sources,incidents,history,historyPersistent,critical:incidents.some(x=>x.severity>=85&&x.geographic==='local')};
 }
