@@ -16,7 +16,7 @@ const EVENTS: Record<string, number> = {
   'Red Flag Warning': 45, 'Flood Warning': 45, 'Coastal Flood Warning': 40, 'Lakeshore Flood Warning': 35,
   'Dust Storm Warning': 50, 'Avalanche Warning': 50, 'Tsunami Advisory': 50, 'Debris Flow Warning': 65,
   // Disruptive but rarely dangerous to people indoors
-  'High Wind Warning': 35, 'Winter Storm Warning': 35, 'Extreme Cold Warning': 40, 'Wind Chill Warning': 35,
+  'High Wind Warning': 25, 'Winter Storm Warning': 35, 'Extreme Cold Warning': 40, 'Wind Chill Warning': 35,
   'Hard Freeze Warning': 22, 'Freeze Warning': 18, 'Heat Advisory': 22, 'Air Quality Alert': 25, 'Dense Smoke Advisory': 25,
   'Lake Effect Snow Warning': 35, 'High Surf Warning': 25, 'Hurricane Force Wind Warning': 30, 'Storm Warning': 25,
   // Watches: the event is possible, not occurring
@@ -50,7 +50,7 @@ export function weatherAlertSeverity(event: string, capSeverity?: string, text =
 //       1k+ with a 24h+ estimate → at least 60 · 10k+ with 48h+ → at least 85 · 100k+ with 48h+ → 95
 //   * CAISO grid emergencies: Flex Alert/watch 20 · EEA1 35 · EEA2 50 · EEA3 (rotating outages) 75
 //   * water: boil-water / do-not-drink 60 · regional emergency bulletin 35 · street-level outage 30
-//   * ordinary transport disruption .............................. capped at 20 (emergency highway
+//   * road closures: ramp or lane 5 · planned full highway closure 15 · other transport capped at 20 (emergency highway
 //     closure 30, security/outage ground stop 60, unscheduled local airport closure 70, 3+ highways cut 75)
 //   * national security / civil emergency (NWS civil alerts) ..... 85
 //   * natural disasters (earthquake by magnitude at the epicenter) up to 90
@@ -95,7 +95,7 @@ function rescore(source: Source, i: Incident): number {
   // Ordinary transport disruption (weather ground stops, planned roadwork, scheduled closures, chain controls) is a
   // travel problem, not danger: capped at 20 (repeated SFO ground stops showed how quickly it otherwise dominates).
   // Exceptions are events that strand people: see strandingScore() and the area check in applyScoringPolicy().
-  if (source.sector === 'transport') return Math.max(Math.min(was, 20), strandingScore(source, i));
+  if (source.sector === 'transport') return Math.max(routineTransport(i, was), strandingScore(source, i));
   if (source.id === 'usgs') {
     const mag = Number(i.title.match(/^M(-?\d+(?:\.\d+)?)/)?.[1]);
     return Number.isFinite(mag) ? earthquakeScore(mag) : was;
@@ -105,6 +105,15 @@ function rescore(source: Source, i: Incident): number {
 const EMERGENCY_WORK = /emergency|incident|collision|crash|slide|fire|flood|hazmat|spill|debris|sinkhole|earthquake|storm damage|stalled|disabled vehicles/i;
 // A full closure of the highway itself (not a ramp or lane) for an emergency rather than planned work.
 export const isEmergencyHighwayClosure = (i: Incident) => /full (mainline|highway|conventional hwy) closure/i.test(i.title) && EMERGENCY_WORK.test(i.description.split('.')[0]);
+// Road closures by whether traffic has a way around: a closed ramp or a lane closure leaves the highway open, and a
+// planned full closure has a signed detour. Emergency full closures are handled by strandingScore() (30, or 75 for 3+).
+export function routineTransport(i: Incident, was: number): number {
+  if (/ closure$/i.test(i.title)) {
+    if (/full (mainline|highway|conventional hwy) closure$/i.test(i.title)) return 15;
+    if (/ramp|connector|lane|alternating|one-way|shoulder|surface street|rest area/i.test(i.title)) return 5;
+  }
+  return Math.min(was, 20);
+}
 export function strandingScore(source: Source, i: Incident): number {
   if (source.id === 'faa') {
     const notice = i.description;
